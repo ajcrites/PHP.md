@@ -15,6 +15,23 @@ final class PhpMd implements Parser {
     */
    private $value = '';
 
+   /**
+    * @var array parser state stack
+    * The state stack is managed backwards, with newer states on top
+    * This makes it easier to reference the zeroth state
+    */
+   private $state = array(ST_ROOT);
+
+   /**#@+
+    * Parse States
+    */
+   const ST_ROOT = 'ST_ROOT';
+   const ST_HEAD = 'ST_HEAD';
+   const ST_HEAD_VALUE = 'ST_HEAD_VALUE';
+   const ST_PRE = 'ST_PRE';
+   const ST_DEDENT_TAB = 'ST_DEDENT_TAB';
+   /**#@-*/
+
    public function __construct(Lexer $lexer, Tree $tree) {
       $this->lexer = $lexer;
       $this->tree = $tree;
@@ -30,65 +47,85 @@ final class PhpMd implements Parser {
 
    public function parse() {
 
-      $state = array('ST_ROOT');
       while ($token = $this->lexer->get()) {
+         //If the token is an escape, add the next token to the current value
          if ($token->get() == '\\') {
             $this->value .= $this->lexer->getRaw();
          }
-         else if ($state[0] == 'ST_ROOT') {
+         //The base state -- add to the root node
+         else if ($this->getState() == self::ST_ROOT) {
+            //Indicates a header level in the root node
             if ($token->get() == '#') {
                $this->tree->appendNode('h1');
                $collect = '#';
-               array_unshift($state, 'ST_HEAD');
+               $this->changeState(self::ST_HEAD);
             }
+            //Indentation is a pre block
             if ($token->get() == "\t") {
                $this->tree->appendNode('pre');
-               array_unshift($state, 'ST_PRE');
+               $this->changeState(self::PRE);
             }
          }
-         else if ($state[0] == 'ST_HEAD') {
+         //While in the head state..
+         else if ($this->getState() == self::ST_HEAD) {
+            //Increase (or decrease?) header level
             if ($token->get() == '#') {
                $collect .= '#';
                $this->tree->updateHeader();
             }
+            //Newline cancels the header
+            //TODO this should probably do something else
             else if ($token->get() == "\n") {
                $this->tree->completeNode();
-               array_shift($state);
+               $this->restoreState();
             }
+            //
             else {
                $this->value .= $token->get();
-               array_shift($state);
-               array_unshift($state, 'ST_HEAD_VALUE');
+               $this->restoreState();
+               $this->changeState(self::ST_HEAD_VALUE);
                $collect = '';
             }
          }
-         else if ($state[0] == 'ST_HEAD_VALUE') {
+         else if ($this->getState() == self::ST_HEAD_VALUE) {
             if ($token->get() == "\n") {
                str_replace($collect, '', $this->value);
                $this->tree->appendValue($this->value);
                $this->tree->completeNode();
                $this->value = '';
-               array_shift($state);
+               $this->restoreState();
             }
          }
-         else if ($state[0] == 'ST_PRE') {
+         else if ($this->getState() == self::ST_PRE) {
             if ($token->get() == "\n") {
-               array_unshift($state, 'ST_DEDENT_TAB');
+               $this->changeState(self::ST_DEDENT_TAB);
             }
             else {
                $this->value .= $token->get();
             }
          }
-         else if ($state[0] == 'ST_DEDENT_TAB') {
-            array_shift($state);
+         else if ($this->getState() == self::ST_DEDENT_TAB) {
+            $this->restoreState();
             if ($token->get() != "\t") {
-               array_shift($state);
+               $this->restoreState();
                $this->tree->appendValue($this->value);
                $this->tree->completeNode();
                $this->value = '';
             }
          }
       }
+   }
+
+   public function getState() {
+      return $this->state[0];
+   }
+
+   public function changeState($to) {
+      array_unshift($this->state, $to);
+   }
+
+   public function restoreState() {
+      array_shift($this->state);
    }
 }
 ?>
