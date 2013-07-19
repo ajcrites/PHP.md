@@ -30,6 +30,9 @@ final class PhpMd implements Parser {
    const ST_HEAD_VALUE = 'ST_HEAD_VALUE';
    const ST_PRE = 'ST_PRE';
    const ST_DEDENT_TAB = 'ST_DEDENT_TAB';
+   const ST_CODE = 'ST_CODE';
+   const ST_UL = 'ST_UL';
+   const ST_LI = 'ST_LI';
    /**#@-*/
 
    public function __construct(Lexer $lexer, Tree $tree) {
@@ -63,7 +66,15 @@ final class PhpMd implements Parser {
             //Indentation is a pre block
             if ($token->get() == "\t") {
                $this->tree->appendNode('pre');
-               $this->changeState(self::PRE);
+               $this->changeState(self::ST_PRE);
+            }
+            if ($token->get() == '`') {
+               $this->tree->appendNode('code');
+               $this->changeState(self::ST_CODE);
+            }
+            if ($token->get() == '*') {
+               $this->tree->appendNode('ul');
+               $this->changeState(self::ST_UL);
             }
          }
          //While in the head state..
@@ -79,7 +90,7 @@ final class PhpMd implements Parser {
                $this->tree->completeNode();
                $this->restoreState();
             }
-            //
+            //Now accepting value for the head
             else {
                $this->value .= $token->get();
                $this->restoreState();
@@ -87,16 +98,17 @@ final class PhpMd implements Parser {
                $collect = '';
             }
          }
+         //We have a header .. fill it with this value
          else if ($this->getState() == self::ST_HEAD_VALUE) {
+            //.. Until newline indicating completion
             if ($token->get() == "\n") {
-               str_replace($collect, '', $this->value);
-               $this->tree->appendValue($this->value);
-               $this->tree->completeNode();
-               $this->value = '';
-               $this->restoreState();
+               $this->value = str_replace($collect, '', $this->value);
+               $this->completeNode();
             }
          }
+         // Tabbed in state.  Markdown does not apply here
          else if ($this->getState() == self::ST_PRE) {
+            // After a newline, the tabbed state ends unless there is another tab
             if ($token->get() == "\n") {
                $this->changeState(self::ST_DEDENT_TAB);
             }
@@ -104,14 +116,52 @@ final class PhpMd implements Parser {
                $this->value .= $token->get();
             }
          }
+         //Expecting a tab to continue the tabbed state
          else if ($this->getState() == self::ST_DEDENT_TAB) {
             $this->restoreState();
-            if ($token->get() != "\t") {
-               $this->restoreState();
-               $this->tree->appendValue($this->value);
-               $this->tree->completeNode();
-               $this->value = '';
+            //Newlines are allowed in the tabbed state without being tabbed in
+            if ($token->get() == "\n") {
+               $this->value .= "\n";
             }
+            //The next line did not tab, so complete the tabbed-in stuff
+            else if ($token->get() != "\t") {
+               $this->completeNode();
+            }
+         }
+         //Code blocks are simple.  Wrap with backtick
+         else if ($this->getState() == self::ST_CODE) {
+            if ($token->get() == '`') {
+               $this->completeNode();
+            }
+         }
+         else if ($this->getState() == self::ST_UL) {
+            //Valueless list item should not be ul-wrapped
+            if ($token->get() == "\n") {
+               $this->tree->updateNode('TEXT');
+               $this->tree->appendValue('*');
+               $this->restoreState();
+            }
+            //Add whitespace to value, but non-whitespace is still required to create ul
+            else if ($token->get() == " " || $token->get() == "\t") {
+               $this->value .= $token->get();
+            }
+            else {
+               $this->value .= $token->get();
+               $this->changeState(self::ST_LI);
+            }
+         }
+         //List item is terminated by newline
+         //TODO it should actually be terminated by dedent
+         else if ($this->getState() == self::ST_LI) {
+            if ($token->get() == "\n") {
+               $this->completeNode();
+            }
+            else {
+               $this->value .= $token->get();
+            }
+         }
+         else {
+            $this->value .= $token->get();
          }
       }
    }
@@ -126,6 +176,13 @@ final class PhpMd implements Parser {
 
    public function restoreState() {
       array_shift($this->state);
+   }
+
+   public function completeNode() {
+      $this->tree->appendValue($this->value);
+      $this->tree->completeNode();
+      $this->value = '';
+      $this->restoreState();
    }
 }
 ?>
